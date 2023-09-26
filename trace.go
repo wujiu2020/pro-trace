@@ -9,6 +9,8 @@ import (
 	"net"
 	"sync"
 	"time"
+
+	"github.com/google/uuid"
 	"golang.org/x/net/icmp"
 	"golang.org/x/net/ipv4"
 	"golang.org/x/net/ipv6"
@@ -72,7 +74,7 @@ func NewTracer(addr string) (*Tracer, error) {
 
 func New(addr string) *Tracer {
 	return &Tracer{
-		id:             gernerateID(),
+		id:             int(uuid.New().ID()),
 		Count:          3,
 		PacketInterval: 10 * time.Millisecond,
 		Size:           64,
