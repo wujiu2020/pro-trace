@@ -10,7 +10,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/google/uuid"
 	"golang.org/x/net/icmp"
 	"golang.org/x/net/ipv4"
 	"golang.org/x/net/ipv6"
@@ -74,7 +73,7 @@ func NewTracer(addr string) (*Tracer, error) {
 
 func New(addr string) *Tracer {
 	return &Tracer{
-		id:             int(uuid.New().ID()),
+		id:             0,
 		Count:          3,
 		PacketInterval: 10 * time.Millisecond,
 		Size:           64,
@@ -107,6 +106,11 @@ func (t *Tracer) SetBeginHop(n int) error {
 		return errors.New("invalid begin hop")
 	}
 	return nil
+}
+
+// SetID sets the ICMP identifier.
+func (t *Tracer) SetID(id int) {
+	t.id = id
 }
 
 func (t *Tracer) Resolve() error {

@@ -3,6 +3,7 @@ package trace_test
 import (
 	"fmt"
 	"testing"
+
 	trace "github.com/wujiu2020/pro-trace"
 )
 
