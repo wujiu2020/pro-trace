@@ -42,6 +42,8 @@ type Tracer struct {
 	Size int
 	// Source is the source IP address
 	Source string
+	// mtr
+	Mtr bool
 
 	addr       string
 	ipaddr     net.IP
@@ -263,19 +265,38 @@ func (t *Tracer) loopSend() error {
 			timeout.Stop()
 			return nil
 		case <-interval.C:
-			count += 1
-			if count > t.Count {
-				ttl += 1
+			if !t.Mtr {
+				count += 1
+				if count > t.Count {
+					ttl += 1
+					if ttl > t.MaxHops || (t.final != -1 && ttl > t.final) {
+						interval.Stop()
+						return nil
+					}
+					t.addHops(ttl - 1)
+					count = 1
+				}
+				err := t.sendICMP(ttl, count)
+				if err != nil {
+					t.hops[ttl-1][count-1].Error = err
+				}
+			} else {
 				if ttl > t.MaxHops || (t.final != -1 && ttl > t.final) {
+					count += 1
+					ttl = 1
+				}
+				err := t.sendICMP(ttl, count)
+				if err != nil {
+					t.hops[ttl-1][count-1].Error = err
+				}
+				if count == t.Count {
 					interval.Stop()
 					return nil
 				}
-				t.addHops(ttl - 1)
-				count = 1
-			}
-			err := t.sendICMP(ttl, count)
-			if err != nil {
-				t.hops[ttl-1][count-1].Error = err
+				ttl += 1
+				if len(t.Hops()) < ttl {
+					t.addHops(ttl - 1)
+				}
 			}
 		}
 	}
