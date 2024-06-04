@@ -240,7 +240,9 @@ func (t *Tracer) listenICMP() error {
 		hop.Address = peer
 		hop.Error = nil
 		if peer.String() == t.ipaddr.String() && (t.final == -1 || (seq/t.Count+1) == t.final) {
-			t.final = seq/t.Count + 1
+			if t.final == -1 {
+				t.final = seq/t.Count + 1
+			}
 			t.finalCount += 1
 			//当最后一跳的包接收完毕后等待一个设置的超时时间结束接收消息
 			if t.finalCount == t.Count {
@@ -283,15 +285,15 @@ func (t *Tracer) loopSend() error {
 			} else {
 				if ttl > t.MaxHops || (t.final != -1 && ttl > t.final) {
 					count += 1
+					if count > t.Count {
+						interval.Stop()
+						return nil
+					}
 					ttl = 1
 				}
 				err := t.sendICMP(ttl, count)
 				if err != nil {
 					t.hops[ttl-1][count-1].Error = err
-				}
-				if count == t.Count {
-					interval.Stop()
-					return nil
 				}
 				ttl += 1
 				if len(t.Hops()) < ttl {
