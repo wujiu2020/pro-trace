@@ -2,7 +2,6 @@ package trace
 
 import (
 	"bytes"
-	"context"
 	"encoding/binary"
 	"errors"
 	"log"
@@ -153,31 +152,20 @@ func (t *Tracer) Stop() {
 }
 
 func (t *Tracer) Run() error {
-	return t.RunWithContext(context.Background())
-}
-
-func (t *Tracer) RunWithContext(ctx context.Context) error {
 	// listen addr
-	if conn, err := net.ListenPacket(t.network, t.Source); err != nil {
+	conn, err := net.ListenPacket(t.network, t.Source)
+	if err != nil {
 		return err
 	} else {
 		t.icmpListen = conn
 	}
+	defer t.icmpListen.Close()
 	if err := t.icmpListen.SetReadDeadline(time.Now().Add(t.Timeout + time.Duration(t.MaxHops*t.Count)*t.PacketInterval)); err != nil {
 		log.Fatal(err)
 		return err
 	}
 	// init all hops
-	g, ctx := errgroup.WithContext(ctx)
-	g.Go(func() error {
-		select {
-		case <-ctx.Done():
-			t.Stop()
-			return ctx.Err()
-		case <-t.done:
-		}
-		return nil
-	})
+	var g errgroup.Group
 
 	g.Go(func() error {
 		defer t.Stop()
@@ -185,6 +173,7 @@ func (t *Tracer) RunWithContext(ctx context.Context) error {
 	})
 
 	g.Go(func() error {
+		defer t.Stop()
 		return t.loopSend()
 	})
 
@@ -193,6 +182,7 @@ func (t *Tracer) RunWithContext(ctx context.Context) error {
 
 func (t *Tracer) listenICMP() error {
 	timeout := time.NewTimer(t.Timeout + time.Duration(t.Count*t.MaxHops)*t.PacketInterval)
+	defer timeout.Stop()
 	for {
 		select {
 		case <-t.done:
@@ -200,53 +190,53 @@ func (t *Tracer) listenICMP() error {
 		case <-timeout.C:
 			return nil
 		default:
-		}
-		msg := make([]byte, 1500)
-		n, peer, err := t.icmpListen.ReadFrom(msg)
-		if err != nil {
-			continue
-		}
-		if n == 0 {
-			continue
-		}
-		proto := 1
-		offset := 0
-		if !t.ipv4 {
-			offset = 20
-			proto = 58
-		}
-
-		rm, err := icmp.ParseMessage(proto, msg[:net.FlagMulticast])
-		if err != nil {
-			log.Println(err)
-			continue
-		}
-		var id, seq int
-		switch rm.Type {
-		case ipv4.ICMPTypeEchoReply, ipv6.ICMPTypeEchoReply:
-			echoReply := rm.Body.(*icmp.Echo)
-			id = echoReply.ID
-			seq = echoReply.Seq
-		case ipv4.ICMPTypeTimeExceeded, ipv6.ICMPTypeTimeExceeded:
-			id = int(binary.BigEndian.Uint16(msg[32+offset : 34+offset]))
-			seq = int(binary.BigEndian.Uint16(msg[34+offset : 36+offset]))
-		}
-		if id != t.id {
-			continue
-		}
-		hop := t.hops[seq/t.Count][seq%t.Count]
-		hop.RTT = time.Since(hop.StartTime)
-		hop.RetType = rm.Type
-		hop.Address = peer
-		hop.Error = nil
-		if peer.String() == t.ipaddr.String() && (t.final == -1 || (seq/t.Count+1) == t.final) {
-			if t.final == -1 {
-				t.final = seq/t.Count + 1
+			msg := make([]byte, 1500)
+			n, peer, err := t.icmpListen.ReadFrom(msg)
+			if err != nil {
+				continue
 			}
-			t.finalCount += 1
-			//当最后一跳的包接收完毕后等待一个设置的超时时间结束接收消息
-			if t.finalCount == t.Count {
-				t.done <- time.NewTimer(t.Timeout)
+			if n == 0 {
+				continue
+			}
+			proto := 1
+			offset := 0
+			if !t.ipv4 {
+				offset = 20
+				proto = 58
+			}
+
+			rm, err := icmp.ParseMessage(proto, msg[:net.FlagMulticast])
+			if err != nil {
+				log.Println(err)
+				continue
+			}
+			var id, seq int
+			switch rm.Type {
+			case ipv4.ICMPTypeEchoReply, ipv6.ICMPTypeEchoReply:
+				echoReply := rm.Body.(*icmp.Echo)
+				id = echoReply.ID
+				seq = echoReply.Seq
+			case ipv4.ICMPTypeTimeExceeded, ipv6.ICMPTypeTimeExceeded:
+				id = int(binary.BigEndian.Uint16(msg[32+offset : 34+offset]))
+				seq = int(binary.BigEndian.Uint16(msg[34+offset : 36+offset]))
+			}
+			if id != t.id {
+				continue
+			}
+			hop := t.hops[seq/t.Count][seq%t.Count]
+			hop.RTT = time.Since(hop.StartTime)
+			hop.RetType = rm.Type
+			hop.Address = peer
+			hop.Error = nil
+			if peer.String() == t.ipaddr.String() && (t.final == -1 || (seq/t.Count+1) == t.final) {
+				if t.final == -1 {
+					t.final = seq/t.Count + 1
+				}
+				t.finalCount += 1
+				//当最后一跳的包接收完毕后等待一个设置的超时时间结束接收消息
+				if t.finalCount == t.Count {
+					t.done <- time.NewTimer(t.Timeout)
+				}
 			}
 		}
 	}
@@ -254,6 +244,7 @@ func (t *Tracer) listenICMP() error {
 
 func (t *Tracer) loopSend() error {
 	interval := time.NewTicker(t.PacketInterval)
+	defer interval.Stop()
 	ttl := t.beginHop
 	count := 1
 	t.addHops(ttl - 1)
@@ -261,10 +252,12 @@ func (t *Tracer) loopSend() error {
 		return err
 	}
 	timeout := time.NewTimer(t.Timeout + time.Duration(t.Count*t.MaxHops)*t.PacketInterval)
+	defer timeout.Stop()
 	for {
 		select {
 		case <-timeout.C:
-			timeout.Stop()
+			return nil
+		case <-t.done:
 			return nil
 		case <-interval.C:
 			if !t.Mtr {
@@ -272,7 +265,6 @@ func (t *Tracer) loopSend() error {
 				if count > t.Count {
 					ttl += 1
 					if ttl > t.MaxHops || (t.final != -1 && ttl > t.final) {
-						interval.Stop()
 						return nil
 					}
 					t.addHops(ttl - 1)
@@ -286,7 +278,6 @@ func (t *Tracer) loopSend() error {
 				if ttl > t.MaxHops || (t.final != -1 && ttl > t.final) {
 					count += 1
 					if count > t.Count {
-						interval.Stop()
 						return nil
 					}
 					ttl = 1
